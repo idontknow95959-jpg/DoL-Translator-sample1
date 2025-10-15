@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "DoL 한글 번역기 샘플1",
+  "version": "1.0.0",
+  "description": "Degrees of Lewdity 게임을 실시간으로 한글 번역합니다",
+  "permissions": [
+    "storage",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "https://generativelanguage.googleapis.com/*",
+    "https://dolmods.net/*",
+    "https://vanilla.dolmods.net/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://dolmods.net/*",
+        "https://vanilla.dolmods.net/*"
+      ],
+      "js": ["dictionary.js", "content.js"],
+      "css": ["styles.css"],
+      "run_at": "document_end",
+      "all_frames": true
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "DoL 번역기 설정"
+  }
+}

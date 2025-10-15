@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DoL 번역기 설정</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body id="popup-body">
+    <h2>⚙️ DoL 번역기 설정</h2>
+    
+    <div class="section">
+        <div class="toggle-container">
+            <span class="toggle-label">번역 기능</span>
+            <label class="switch">
+                <input type="checkbox" id="translationEnabled" name="translationEnabled">
+                <span class="slider"></span>
+            </label>
+        </div>
+    </div>
+
+    <div class="section">
+        <label for="apiKey">Gemini API 키</label>
+        <input type="password" id="apiKey" name="apiKey" placeholder="여기에 API 키를 입력하세요" autocomplete="off">
+        <div class="hint">Google AI Studio에서 발급받은 API 키</div>
+    </div>
+
+    <div class="section">
+        <label for="modelName">모델 이름</label>
+        <input type="text" id="modelName" name="modelName" placeholder="예: gemini-2.0-flash-exp" autocomplete="off">
+        <div class="hint">사용할 Gemini 모델명을 입력하세요 (예: gemini-2.5-flash, gemini-2.5-pro)</div>
+    </div>
+
+    <div class="section">
+        <label for="prompt">번역 프롬프트 (사용자 정의 규칙)</label>
+        <textarea id="prompt" name="prompt" placeholder="캐릭터 말투, 특정 단어 번역 등 추가 규칙을 자유롭게 입력하세요."></textarea>
+        <div class="hint">이 내용은 기본 번역 프롬프트에 추가되어 함께 전송됩니다.</div>
+    </div>
+
+    <button id="saveBtn">저장</button>
+    <div id="status" class="status"></div>
+
+    <div class="section">
+        <button id="refreshBtn">현재 화면 새로 번역</button>
+        <div class="hint">현재 페이지의 번역 캐시를 지우고 다시 번역을 요청합니다.</div>
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html>
