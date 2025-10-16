@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "DoL 한글 번역기 샘플1",
-  "version": "1.0.0",
+  "name": "DoL 한글 번역기",
+  "version": "1.9.3.0",
   "description": "Degrees of Lewdity 게임을 실시간으로 한글 번역합니다",
   "permissions": [
     "storage",
