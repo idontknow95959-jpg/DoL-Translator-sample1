@@ -1,15 +1,54 @@
 // content script에서 번역 요청을 받으면 처리
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'translate') {
-        translateText(request.text)
+        translateText(request.text, request.dictionary)
             .then(translation => sendResponse({ success: true, translation }))
             .catch(error => sendResponse({ success: false, error: error.message }));
         return true; // 비동기 응답을 위해 true 반환
     }
 });
 
+// 텍스트에서 dictionary 매칭 찾기
+function findDictionaryMatches(text, dictionary) {
+    if (!dictionary || dictionary.size === 0) return [];
+    
+    const matches = [];
+    const textLower = text.toLowerCase();
+    
+    // dictionary의 각 항목을 확인
+    for (const [original, translation] of dictionary.entries()) {
+        // 대소문자 구분 없이 단어 경계를 고려한 매칭
+        const regex = new RegExp(`\\b${escapeRegex(original)}\\b`, 'gi');
+        if (regex.test(text)) {
+            matches.push({ original, translation });
+        }
+    }
+    
+    return matches;
+}
+
+// 정규식 특수문자 이스케이프
+function escapeRegex(string) {
+    return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Dictionary 매칭을 프롬프트 형식으로 변환
+function formatDictionaryRules(matches) {
+    if (matches.length === 0) return '';
+    
+    const rules = matches.map(m => 
+        `- "${m.original}" → "${m.translation}"`
+    ).join('\n');
+    
+    return `\n\n## IMPORTANT TRANSLATION RULES
+The following terms MUST be translated consistently as specified:
+${rules}
+
+These are proper nouns or key terms that require consistent translation throughout the text.`;
+}
+
 // Gemini API를 사용하여 텍스트 번역
-async function translateText(text) {
+async function translateText(text, dictionaryObj) {
     // 저장된 설정 가져오기
     const settings = await chrome.storage.sync.get({
         apiKey: '',
@@ -27,6 +66,17 @@ async function translateText(text) {
 
     if (!settings.prompt) {
         throw new Error('번역 프롬프트가 설정되지 않았습니다.');
+    }
+
+    // 객체를 Map으로 변환
+    const dictionary = new Map(Object.entries(dictionaryObj || {}));
+
+    // Dictionary에서 매칭되는 항목 찾기
+    const dictionaryMatches = findDictionaryMatches(text, dictionary);
+    const dictionaryRules = formatDictionaryRules(dictionaryMatches);
+    
+    if (dictionaryMatches.length > 0) {
+        console.log(`📚 Dictionary 매칭: ${dictionaryMatches.length}개 발견`, dictionaryMatches);
     }
 
     // --- 영문 프롬프트 조합 ---
@@ -59,7 +109,10 @@ Output: <a data-passage="Shop" class="link-internal">상점으로 가기</a>
     // 2. 사용자가 정의한 규칙
     const userPrompt = settings.prompt;
 
-    // 3. 번역할 텍스트와 출력 형식 지정 (Suffix)
+    // 3. Dictionary 규칙 추가
+    const dictionarySection = dictionaryRules;
+
+    // 4. 번역할 텍스트와 출력 형식 지정 (Suffix)
     const suffixPrompt = `Now, please translate the following text. Translate the English text only, and output punctuation and other symbols exactly as they are.
 
 --- TEXT TO TRANSLATE ---
@@ -67,7 +120,7 @@ Output: <a data-passage="Shop" class="link-internal">상점으로 가기</a>
 --- END OF TEXT ---`;
 
     // 프롬프트 최종 조합
-    const finalPromptTemplate = `${prefixPrompt}\n\n--- USER RULES ---\n${userPrompt}\n--- END OF RULES ---\n\n${suffixPrompt}`;
+    const finalPromptTemplate = `${prefixPrompt}\n\n--- USER RULES ---\n${userPrompt}\n--- END OF RULES ---${dictionarySection}\n\n${suffixPrompt}`;
     const fullPrompt = finalPromptTemplate.replace('{text}', text);
 
     // API 요청 인풋 확인
