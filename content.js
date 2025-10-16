@@ -7,7 +7,7 @@ if (window.self !== window.top) {
     let showTranslation = true;
     let isTranslating = false;
     let translationCache = new Map();
-    let originalTextCache = new Map(); // element -> original HTML
+    let originalTextCache = new Map();
     let failedTranslations = new Map();
     let observer = null;
     let processedNodes = new WeakSet();
@@ -19,6 +19,111 @@ if (window.self !== window.top) {
     const MAX_BATCH_RETRIES = 3;
     const CACHE_KEY = 'dol_translation_cache';
     const MAX_CACHE_SIZE = 10000;
+
+    // ========== 키보드 이벤트 관련 함수 추가 ==========
+    
+    // 버튼 텍스트에서 키 조합 파싱
+    function parseKeyFromText(text) {
+        if (!text) return null;
+        
+        // (1), (2), ..., (9), (0) 패턴
+        const numberMatch = text.match(/\((\d)\)/);
+        if (numberMatch) {
+            return { key: numberMatch[1], shiftKey: false };
+        }
+        
+        // (Shift+1), (Shift+2) 등 패턴 (대소문자 무시)
+        const shiftMatch = text.match(/\(Shift\s*\+\s*(\d)\)/i);
+        if (shiftMatch) {
+            return { key: shiftMatch[1], shiftKey: true };
+        }
+        
+        return null;
+    }
+
+    // 키보드 이벤트 발생시키기
+    function triggerKeyEvent(key, shiftKey = false) {
+        const numKey = parseInt(key);
+        const keyCode = (numKey === 0) ? 48 : (48 + numKey); // 0은 48, 1은 49, ...
+        
+        console.log(`🎮 키보드 이벤트 발생: ${shiftKey ? 'Shift+' : ''}${key} (keyCode: ${keyCode})`);
+        
+        // keydown 이벤트
+        const keydownEvent = new KeyboardEvent('keydown', {
+            key: key,
+            code: `Digit${key}`,
+            keyCode: keyCode,
+            which: keyCode,
+            shiftKey: shiftKey,
+            bubbles: true,
+            cancelable: true,
+            view: window
+        });
+        document.dispatchEvent(keydownEvent);
+        
+        // keypress 이벤트 (일부 게임에서 필요할 수 있음)
+        const keypressEvent = new KeyboardEvent('keypress', {
+            key: key,
+            code: `Digit${key}`,
+            keyCode: keyCode,
+            which: keyCode,
+            shiftKey: shiftKey,
+            bubbles: true,
+            cancelable: true,
+            view: window
+        });
+        document.dispatchEvent(keypressEvent);
+        
+        // keyup 이벤트
+        setTimeout(() => {
+            const keyupEvent = new KeyboardEvent('keyup', {
+                key: key,
+                code: `Digit${key}`,
+                keyCode: keyCode,
+                which: keyCode,
+                shiftKey: shiftKey,
+                bubbles: true,
+                cancelable: true,
+                view: window
+            });
+            document.dispatchEvent(keyupEvent);
+        }, 50);
+    }
+
+    // 번역 후 링크에 키보드 이벤트 리스너 추가
+    function attachKeyboardShortcuts(element) {
+        if (!element) return;
+        
+        // link-internal 또는 macro-link 클래스를 가진 모든 링크 찾기
+        const links = element.querySelectorAll('a.link-internal, a.macro-link, a[data-passage]');
+        
+        let attachedCount = 0;
+        
+        links.forEach(link => {
+            const linkText = link.textContent || link.innerText || '';
+            const keyInfo = parseKeyFromText(linkText);
+            
+            if (keyInfo) {
+                // 클릭 이벤트 리스너 추가
+                link.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    console.log(`🖱️ 링크 클릭됨: "${linkText.substring(0, 30)}..." → 키 이벤트 발생`);
+                    triggerKeyEvent(keyInfo.key, keyInfo.shiftKey);
+                }, true); // capture phase에서 처리
+                
+                // 접근성을 위해 커서 스타일 유지
+                link.style.cursor = 'pointer';
+                attachedCount++;
+            }
+        });
+        
+        if (attachedCount > 0) {
+            console.log(`✅ ${attachedCount}개의 링크에 키보드 이벤트 연결됨`);
+        }
+    }
+
+    // ========== 기존 함수들 ==========
 
     // 안전한 HTML 정리 함수
     function sanitizeHTML(html) {
@@ -166,7 +271,7 @@ if (window.self !== window.top) {
         }
     }
 
-    // ⭐ 개선된 원문/번역문 표시 전환
+    // 원문/번역문 표시 전환
     function toggleDisplayMode() {
         if (showTranslation) {
             // 번역문으로 전환
@@ -174,17 +279,17 @@ if (window.self !== window.top) {
             let restoredCount = 0;
             
             for (const [element, originalHTML] of originalTextCache.entries()) {
-                // DOM에 여전히 존재하는지 확인
                 if (!document.contains(element)) {
                     originalTextCache.delete(element);
                     continue;
                 }
                 
-                // 해당 element의 번역문이 캐시에 있는지 확인
                 const cachedItem = translationCache.get(originalHTML);
                 if (cachedItem && cachedItem.translation) {
                     const safeHTML = sanitizeHTML(cachedItem.translation);
                     element.innerHTML = safeHTML;
+                    // ⭐ 번역문으로 전환 후 키보드 이벤트 재연결
+                    attachKeyboardShortcuts(element);
                     restoredCount++;
                 }
             }
@@ -306,7 +411,7 @@ if (window.self !== window.top) {
         return null;
     }
 
-    // ⭐ 개선된 스토리 영역 번역
+    // 스토리 영역 번역
     async function translateStoryArea() {
         if (!translationEnabled || isTranslating) return;
 
@@ -362,7 +467,6 @@ if (window.self !== window.top) {
                 const { element, html } = batch;
                 const originalHTML = html;
 
-                // ⭐ 원문을 element 기준으로 저장 (HTML 마크업 포함)
                 if (!originalTextCache.has(element)) {
                     originalTextCache.set(element, originalHTML);
                 }
@@ -371,8 +475,9 @@ if (window.self !== window.top) {
                 if (foundTranslation) {
                     if (showTranslation) {
                         element.innerHTML = sanitizeHTML(foundTranslation);
+                        // ⭐ 번역 적용 후 키보드 이벤트 연결
+                        attachKeyboardShortcuts(element);
                     }
-                    // ⭐ 번역 캐시도 element 참조 저장
                     if (!translationCache.has(originalHTML)) {
                         translationCache.set(originalHTML, { 
                             translation: foundTranslation, 
@@ -421,26 +526,25 @@ if (window.self !== window.top) {
         }, 5000);
     }
 
-    // ⭐ 개선된 번역 함수 (element 기준)
+    // 번역 함수
     async function translateWithRetry(text, element, currentRetry = 0) {
         try {
             console.log(`번역 요청 (시도 ${currentRetry + 1}/${MAX_TRANSLATION_RETRIES}):`, text.substring(0, 50) + '...');
             const translation = await requestTranslation(text);
 
             if (translation) {
-                // 캐시 저장
                 translationCache.set(text, { 
                     translation, 
                     elements: [element] 
                 });
 
-                // 번역문 적용
                 if (showTranslation && element && document.contains(element)) {
                     const safeHTML = sanitizeHTML(translation);
                     element.innerHTML = safeHTML;
+                    // ⭐ 번역 적용 후 키보드 이벤트 연결
+                    attachKeyboardShortcuts(element);
                 }
 
-                // 처리 완료 표시
                 processedNodes.add(element);
                 failedTranslations.delete(text);
                 
