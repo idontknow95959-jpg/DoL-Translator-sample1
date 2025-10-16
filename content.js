@@ -176,12 +176,9 @@ if (window.self !== window.top) {
                 for (const [key, value] of entries) {
                     if (count >= MAX_CACHE_SIZE) break;
 
-                    const trimmedKey = key.trim().toLowerCase();
-                    if (typeof localDictionary === 'undefined' || !localDictionary[trimmedKey]) {
                         cacheObject[key] = value.translation;
                         count++;
                     }
-                }
                 
                 if (count > 0) {
                     await chrome.storage.local.set({ [CACHE_KEY]: cacheObject });
@@ -389,15 +386,9 @@ if (window.self !== window.top) {
 
     // 번역문 찾기
     function findTranslation(text) {
-        const trimmedText = text.trim().toLowerCase();
-        if (typeof localDictionary !== 'undefined' && localDictionary[trimmedText]) {
-            return localDictionary[trimmedText];
-        }
-
         if (translationCache.has(text)) {
             return translationCache.get(text).translation;
-        }
-        
+        }      
         return null;
     }
 
