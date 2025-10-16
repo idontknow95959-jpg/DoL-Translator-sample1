@@ -20,7 +20,7 @@ if (window.self !== window.top) {
     const CACHE_KEY = 'dol_translation_cache';
     const MAX_CACHE_SIZE = 10000;
 
-    // ========== 키보드 이벤트 관련 함수 추가 ==========
+    // ========== 키보드 이벤트 관련 함수 ==========
     
     // 버튼 텍스트에서 키 조합 파싱
     function parseKeyFromText(text) {
@@ -44,11 +44,10 @@ if (window.self !== window.top) {
     // 키보드 이벤트 발생시키기
     function triggerKeyEvent(key, shiftKey = false) {
         const numKey = parseInt(key);
-        const keyCode = (numKey === 0) ? 48 : (48 + numKey); // 0은 48, 1은 49, ...
+        const keyCode = (numKey === 0) ? 48 : (48 + numKey);
         
         console.log(`🎮 키보드 이벤트 발생: ${shiftKey ? 'Shift+' : ''}${key} (keyCode: ${keyCode})`);
         
-        // keydown 이벤트
         const keydownEvent = new KeyboardEvent('keydown', {
             key: key,
             code: `Digit${key}`,
@@ -61,7 +60,6 @@ if (window.self !== window.top) {
         });
         document.dispatchEvent(keydownEvent);
         
-        // keypress 이벤트 (일부 게임에서 필요할 수 있음)
         const keypressEvent = new KeyboardEvent('keypress', {
             key: key,
             code: `Digit${key}`,
@@ -74,7 +72,6 @@ if (window.self !== window.top) {
         });
         document.dispatchEvent(keypressEvent);
         
-        // keyup 이벤트
         setTimeout(() => {
             const keyupEvent = new KeyboardEvent('keyup', {
                 key: key,
@@ -94,9 +91,7 @@ if (window.self !== window.top) {
     function attachKeyboardShortcuts(element) {
         if (!element) return;
         
-        // link-internal 또는 macro-link 클래스를 가진 모든 링크 찾기
         const links = element.querySelectorAll('a.link-internal, a.macro-link, a[data-passage]');
-        
         let attachedCount = 0;
         
         links.forEach(link => {
@@ -104,15 +99,13 @@ if (window.self !== window.top) {
             const keyInfo = parseKeyFromText(linkText);
             
             if (keyInfo) {
-                // 클릭 이벤트 리스너 추가
                 link.addEventListener('click', function(e) {
                     e.preventDefault();
                     e.stopPropagation();
                     console.log(`🖱️ 링크 클릭됨: "${linkText.substring(0, 30)}..." → 키 이벤트 발생`);
                     triggerKeyEvent(keyInfo.key, keyInfo.shiftKey);
-                }, true); // capture phase에서 처리
+                }, true);
                 
-                // 접근성을 위해 커서 스타일 유지
                 link.style.cursor = 'pointer';
                 attachedCount++;
             }
@@ -184,7 +177,7 @@ if (window.self !== window.top) {
                     if (count >= MAX_CACHE_SIZE) break;
 
                     const trimmedKey = key.trim().toLowerCase();
-                    if (typeof localDictionary === 'undefined' || !localDictionary.has(trimmedKey)) {
+                    if (typeof localDictionary === 'undefined' || !localDictionary[trimmedKey]) {
                         cacheObject[key] = value.translation;
                         count++;
                     }
@@ -274,7 +267,6 @@ if (window.self !== window.top) {
     // 원문/번역문 표시 전환
     function toggleDisplayMode() {
         if (showTranslation) {
-            // 번역문으로 전환
             console.log('🔄 번역문으로 전환');
             let restoredCount = 0;
             
@@ -288,7 +280,6 @@ if (window.self !== window.top) {
                 if (cachedItem && cachedItem.translation) {
                     const safeHTML = sanitizeHTML(cachedItem.translation);
                     element.innerHTML = safeHTML;
-                    // ⭐ 번역문으로 전환 후 키보드 이벤트 재연결
                     attachKeyboardShortcuts(element);
                     restoredCount++;
                 }
@@ -296,7 +287,6 @@ if (window.self !== window.top) {
             
             console.log(`✅ ${restoredCount}개의 번역문을 복원했습니다.`);
         } else {
-            // 원문으로 전환
             console.log('🔄 원문으로 전환');
             let restoredCount = 0;
             
@@ -400,8 +390,8 @@ if (window.self !== window.top) {
     // 번역문 찾기
     function findTranslation(text) {
         const trimmedText = text.trim().toLowerCase();
-        if (typeof localDictionary !== 'undefined' && localDictionary.has(trimmedText)) {
-            return localDictionary.get(trimmedText);
+        if (typeof localDictionary !== 'undefined' && localDictionary[trimmedText]) {
+            return localDictionary[trimmedText];
         }
 
         if (translationCache.has(text)) {
@@ -475,7 +465,6 @@ if (window.self !== window.top) {
                 if (foundTranslation) {
                     if (showTranslation) {
                         element.innerHTML = sanitizeHTML(foundTranslation);
-                        // ⭐ 번역 적용 후 키보드 이벤트 연결
                         attachKeyboardShortcuts(element);
                     }
                     if (!translationCache.has(originalHTML)) {
@@ -541,7 +530,6 @@ if (window.self !== window.top) {
                 if (showTranslation && element && document.contains(element)) {
                     const safeHTML = sanitizeHTML(translation);
                     element.innerHTML = safeHTML;
-                    // ⭐ 번역 적용 후 키보드 이벤트 연결
                     attachKeyboardShortcuts(element);
                 }
 
@@ -660,21 +648,13 @@ if (window.self !== window.top) {
         return true;
     }
 
-    // 번역 요청
+    // 번역 요청 - dictionary를 그대로 전달
     function requestTranslation(text) {
         return new Promise((resolve, reject) => {
-            // dictionary를 객체로 변환하여 전달
-            const dictionaryObj = {};
-            if (typeof localDictionary !== 'undefined') {
-                for (const [key, value] of localDictionary.entries()) {
-                    dictionaryObj[key] = value;
-                }
-            }
-        
             chrome.runtime.sendMessage({ 
                 action: 'translate', 
                 text: text,
-                dictionary: dictionaryObj  // dictionary 추가 전달
+                dictionary: typeof localDictionary !== 'undefined' ? localDictionary : {}
             }, (response) => {
                 if (chrome.runtime.lastError) {
                     reject(new Error(chrome.runtime.lastError.message));
