@@ -10,13 +10,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
 // 텍스트에서 dictionary 매칭 찾기
 function findDictionaryMatches(text, dictionary) {
-    if (!dictionary || dictionary.size === 0) return [];
+    if (!dictionary || Object.keys(dictionary).length === 0) return [];
     
     const matches = [];
-    const textLower = text.toLowerCase();
     
     // dictionary의 각 항목을 확인
-    for (const [original, translation] of dictionary.entries()) {
+    for (const [original, translation] of Object.entries(dictionary)) {
         // 대소문자 구분 없이 단어 경계를 고려한 매칭
         const regex = new RegExp(`\\b${escapeRegex(original)}\\b`, 'gi');
         if (regex.test(text)) {
@@ -48,12 +47,12 @@ These are proper nouns or key terms that require consistent translation througho
 }
 
 // Gemini API를 사용하여 텍스트 번역
-async function translateText(text, dictionaryObj) {
+async function translateText(text, dictionary) {
     // 저장된 설정 가져오기
     const settings = await chrome.storage.sync.get({
         apiKey: '',
         modelName: 'gemini-2.5-flash',
-        prompt: '' // 사용자가 입력한 프롬프트
+        prompt: ''
     });
 
     if (!settings.apiKey) {
@@ -68,9 +67,6 @@ async function translateText(text, dictionaryObj) {
         throw new Error('번역 프롬프트가 설정되지 않았습니다.');
     }
 
-    // 객체를 Map으로 변환
-    const dictionary = new Map(Object.entries(dictionaryObj || {}));
-
     // Dictionary에서 매칭되는 항목 찾기
     const dictionaryMatches = findDictionaryMatches(text, dictionary);
     const dictionaryRules = formatDictionaryRules(dictionaryMatches);
@@ -79,8 +75,7 @@ async function translateText(text, dictionaryObj) {
         console.log(`📚 Dictionary 매칭: ${dictionaryMatches.length}개 발견`, dictionaryMatches);
     }
 
-    // --- 영문 프롬프트 조합 ---
-    // 1. 역할 및 기본 규칙 부여 (Prefix)
+    // --- 프롬프트 조합 ---
     const prefixPrompt = `
     {
       "role": "user",
@@ -106,28 +101,20 @@ Output: <a data-passage="Shop" class="link-internal">상점으로 가기</a>
       ]
     }`;
 
-    // 2. 사용자가 정의한 규칙
     const userPrompt = settings.prompt;
-
-    // 3. Dictionary 규칙 추가
     const dictionarySection = dictionaryRules;
 
-    // 4. 번역할 텍스트와 출력 형식 지정 (Suffix)
     const suffixPrompt = `Now, please translate the following text. Translate the English text only, and output punctuation and other symbols exactly as they are.
 
 --- TEXT TO TRANSLATE ---
-{text}
+${text}
 --- END OF TEXT ---`;
 
-    // 프롬프트 최종 조합
-    const finalPromptTemplate = `${prefixPrompt}\n\n--- USER RULES ---\n${userPrompt}\n--- END OF RULES ---${dictionarySection}\n\n${suffixPrompt}`;
-    const fullPrompt = finalPromptTemplate.replace('{text}', text);
+    const fullPrompt = `${prefixPrompt}\n\n--- USER RULES ---\n${userPrompt}\n--- END OF RULES ---${dictionarySection}\n\n${suffixPrompt}`;
 
-    // API 요청 인풋 확인
-    console.log('Gemini API 요청 인풋:', fullPrompt); 
+    console.log('Gemini API 요청 인풋:', fullPrompt);
 
     try {
-        // Gemini API 호출
         const response = await fetch(
             `https://generativelanguage.googleapis.com/v1beta/models/${settings.modelName}:generateContent?key=${settings.apiKey}`,
             {
@@ -156,7 +143,6 @@ Output: <a data-passage="Shop" class="link-internal">상점으로 가기</a>
 
         const data = await response.json();
         
-        // 응답 구조 상세 검증
         console.log('API 응답:', JSON.stringify(data, null, 2));
         
         if (!data) {
@@ -174,7 +160,6 @@ Output: <a data-passage="Shop" class="link-internal">상점으로 가기</a>
         }
 
         if (!candidate.content) {
-            // finishReason 확인
             const finishReason = candidate.finishReason;
             if (finishReason === 'SAFETY') {
                 throw new Error('안전 필터에 의해 차단되었습니다.');
@@ -204,7 +189,6 @@ Output: <a data-passage="Shop" class="link-internal">상점으로 가기</a>
         return translatedText;
         
     } catch (error) {
-        // 네트워크 오류 등 상세 로깅
         console.error('번역 오류 상세:', error);
         throw error;
     }
