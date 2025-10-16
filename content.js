@@ -663,7 +663,19 @@ if (window.self !== window.top) {
     // 번역 요청
     function requestTranslation(text) {
         return new Promise((resolve, reject) => {
-            chrome.runtime.sendMessage({ action: 'translate', text: text }, (response) => {
+            // dictionary를 객체로 변환하여 전달
+            const dictionaryObj = {};
+            if (typeof localDictionary !== 'undefined') {
+                for (const [key, value] of localDictionary.entries()) {
+                    dictionaryObj[key] = value;
+                }
+            }
+        
+            chrome.runtime.sendMessage({ 
+                action: 'translate', 
+                text: text,
+                dictionary: dictionaryObj  // dictionary 추가 전달
+            }, (response) => {
                 if (chrome.runtime.lastError) {
                     reject(new Error(chrome.runtime.lastError.message));
                 } else if (response && response.success) {
