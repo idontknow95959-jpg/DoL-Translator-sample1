@@ -7,8 +7,9 @@ if (window.self !== window.top) {
     let showTranslation = true;
     let isTranslating = false;
     let translationCache = new Map();
-    let originalTextCache = new Map();
+    let originalTextCache = new WeakMap();
     let failedTranslations = new Map();
+    let failedElements = new WeakMap();
     let observer = null;
     let processedNodes = new WeakSet();
     let retryCount = 0;
@@ -19,8 +20,6 @@ if (window.self !== window.top) {
     const MAX_BATCH_RETRIES = 3;
     const CACHE_KEY = 'dol_translation_cache';
     const MAX_CACHE_SIZE = 10000;
-
-    // ========== 키보드 이벤트 관련 함수 ==========
     
     // 버튼 텍스트에서 키 조합 파싱
     function parseKeyFromText(text) {
@@ -116,8 +115,6 @@ if (window.self !== window.top) {
         }
     }
 
-    // ========== 기존 함수들 ==========
-
     // 안전한 HTML 정리 함수
     function sanitizeHTML(html) {
         const wrapper = document.createElement('div');
@@ -154,7 +151,7 @@ if (window.self !== window.top) {
                 const cacheData = result[CACHE_KEY];
                 console.log(`📦 캐시 로드: ${Object.keys(cacheData).length}개 항목`);
                 for (const [key, value] of Object.entries(cacheData)) {
-                    translationCache.set(key, { translation: value, elements: [] });
+                    translationCache.set(key, value);  // 👈 직접 저장
                 }
             }
         } catch (error) {
@@ -176,7 +173,7 @@ if (window.self !== window.top) {
                 for (const [key, value] of entries) {
                     if (count >= MAX_CACHE_SIZE) break;
 
-                        cacheObject[key] = value.translation;
+                        cacheObject[key] = value;
                         count++;
                     }
                 
@@ -189,6 +186,23 @@ if (window.self !== window.top) {
                 console.error('캐시 저장 실패:', error);
             }
         }, 2000);
+    }
+
+    // 번역 적용 헬퍼 함수
+    function applyTranslation(element, translation, originalHTML) {
+        if (!element || !document.contains(element)) return false;
+    
+        originalTextCache.set(element, originalHTML);
+        element.setAttribute('data-dol-translated', 'true');
+    
+        try {
+            element.innerHTML = sanitizeHTML(translation);
+            attachKeyboardShortcuts(element);
+            return true;
+        } catch (error) {
+            console.error('번역 적용 실패:', error);
+            return false;
+        }
     }
 
     // 캐시 통계
@@ -263,39 +277,43 @@ if (window.self !== window.top) {
 
     // 원문/번역문 표시 전환
     function toggleDisplayMode() {
+        const storyArea = document.querySelector('#story');
+        if (!storyArea) return;
+    
         if (showTranslation) {
             console.log('🔄 번역문으로 전환');
             let restoredCount = 0;
-            
-            for (const [element, originalHTML] of originalTextCache.entries()) {
-                if (!document.contains(element)) {
-                    originalTextCache.delete(element);
-                    continue;
+        
+            // 마커 속성으로 번역된 요소 찾기
+            const elements = storyArea.querySelectorAll('[data-dol-translated]');  // 👈 수정
+        
+            elements.forEach(element => {
+                const originalHTML = originalTextCache.get(element);
+                if (originalHTML) {
+                    const translation = translationCache.get(originalHTML);
+                    if (translation) {
+                        element.innerHTML = sanitizeHTML(translation);
+                        attachKeyboardShortcuts(element);
+                        restoredCount++;
+                    }
                 }
-                
-                const cachedItem = translationCache.get(originalHTML);
-                if (cachedItem && cachedItem.translation) {
-                    const safeHTML = sanitizeHTML(cachedItem.translation);
-                    element.innerHTML = safeHTML;
-                    attachKeyboardShortcuts(element);
-                    restoredCount++;
-                }
-            }
-            
+            });
+        
             console.log(`✅ ${restoredCount}개의 번역문을 복원했습니다.`);
         } else {
             console.log('🔄 원문으로 전환');
             let restoredCount = 0;
-            
-            for (const [element, originalHTML] of originalTextCache.entries()) {
-                if (document.contains(element)) {
+        
+            const elements = storyArea.querySelectorAll('[data-dol-translated]');  // 👈 수정
+        
+            elements.forEach(element => {
+                const originalHTML = originalTextCache.get(element);
+                if (originalHTML) {
                     element.innerHTML = originalHTML;
                     restoredCount++;
-                } else {
-                    originalTextCache.delete(element);
                 }
-            }
-            
+            });
+        
             console.log(`✅ ${restoredCount}개의 원문을 복원했습니다.`);
         }
     }
@@ -387,7 +405,7 @@ if (window.self !== window.top) {
     // 번역문 찾기
     function findTranslation(text) {
         if (translationCache.has(text)) {
-            return translationCache.get(text).translation;
+            return translationCache.get(text);  // 👈 직접 반환
         }      
         return null;
     }
@@ -448,26 +466,13 @@ if (window.self !== window.top) {
                 const { element, html } = batch;
                 const originalHTML = html;
 
-                if (!originalTextCache.has(element)) {
-                    originalTextCache.set(element, originalHTML);
-                }
-
                 const foundTranslation = findTranslation(originalHTML);
                 if (foundTranslation) {
                     if (showTranslation) {
-                        element.innerHTML = sanitizeHTML(foundTranslation);
-                        attachKeyboardShortcuts(element);
-                    }
-                    if (!translationCache.has(originalHTML)) {
-                        translationCache.set(originalHTML, { 
-                            translation: foundTranslation, 
-                            elements: [element] 
-                        });
+                        applyTranslation(element, foundTranslation, originalHTML);  // 👈 수정
                     } else {
-                        const cached = translationCache.get(originalHTML);
-                        if (!cached.elements.includes(element)) {
-                            cached.elements.push(element);
-                        }
+                        originalTextCache.set(element, originalHTML);
+                        element.setAttribute('data-dol-translated', 'true');
                     }
                     translatedCount++;
                     continue;
@@ -513,20 +518,19 @@ if (window.self !== window.top) {
             const translation = await requestTranslation(text);
 
             if (translation) {
-                translationCache.set(text, { 
-                    translation, 
-                    elements: [element] 
-                });
+                // elements 배열 제거
+                translationCache.set(text, translation);  // 👈 수정
 
                 if (showTranslation && element && document.contains(element)) {
-                    const safeHTML = sanitizeHTML(translation);
-                    element.innerHTML = safeHTML;
-                    attachKeyboardShortcuts(element);
+                    applyTranslation(element, translation, text);  // 👈 수정
+                } else {
+                    originalTextCache.set(element, text);
+                    element.setAttribute('data-dol-translated', 'true');
                 }
 
                 processedNodes.add(element);
                 failedTranslations.delete(text);
-                
+            
                 console.log('✓ 번역 성공:', translation.substring(0, 50) + '...');
                 return { success: true };
             }
@@ -539,7 +543,8 @@ if (window.self !== window.top) {
                 await sleep(1000);
                 return await translateWithRetry(text, element, currentRetry + 1);
             } else {
-                failedTranslations.set(text, { element, retryCount: 0 });
+                failedTranslations.set(text, { retryCount: 0 });
+                failedElements.set(element, text);
                 console.error('❌ 최대 재시도 횟수 초과:', text.substring(0, 50) + '...');
                 return { success: false };
             }
@@ -601,7 +606,9 @@ if (window.self !== window.top) {
                     return NodeFilter.FILTER_REJECT;
                 }
 
-                if (parent.closest('#saves-list-container')) return NodeFilter.FILTER_REJECT;
+                if (parent.closest('#customOverlay[data-overlay="saves"]')) {
+                return NodeFilter.FILTER_REJECT;
+                }
 
                 if (!node.textContent.trim()) {
                     return NodeFilter.FILTER_REJECT;
@@ -663,29 +670,92 @@ if (window.self !== window.top) {
         return new Promise(resolve => setTimeout(resolve, ms));
     }
     
-    // 강제 새로고침
+// 강제 새로고침 - 현재 화면만
     async function forceRefresh() {
-        console.log('🔄 수동 새로고침 요청 수신됨. 캐시를 지우고 새로 번역합니다.');
+        console.log('🔄 수동 새로고침 요청 수신됨. 현재 화면의 캐시를 지우고 새로 번역합니다.');
         
         if (isTranslating) {
             console.log('번역이 진행 중이므로 새로고침을 중단합니다.');
             return;
         }
-        if (observer) observer.disconnect();
 
+        const storyArea = document.querySelector('#story');
+        if (!storyArea) {
+            console.error('스토리 영역을 찾을 수 없습니다.');
+            return;
+        }
+
+        // 현재 화면에 표시된 원문 수집
+        const currentOriginalTexts = new Set();
+        for (const [element, originalHTML] of originalTextCache.entries()) {
+            if (document.contains(element) && storyArea.contains(element)) {
+                currentOriginalTexts.add(originalHTML);
+            }
+        }
+
+        console.log(`📝 현재 화면의 ${currentOriginalTexts.size}개 원문 캐시를 삭제합니다.`);
+
+        // 현재 화면의 원문만 캐시에서 삭제
+        let deletedCount = 0;
+        for (const originalText of currentOriginalTexts) {
+            if (translationCache.has(originalText)) {
+                translationCache.delete(originalText);
+                deletedCount++;
+            }
+        }
+
+        console.log(`🗑️ ${deletedCount}개의 번역 캐시가 삭제되었습니다.`);
+
+        // 영구 저장소에서도 삭제
+        try {
+            const result = await chrome.storage.local.get(CACHE_KEY);
+            if (result[CACHE_KEY]) {
+                const cacheData = result[CACHE_KEY];
+                let storageDeletedCount = 0;
+                
+                for (const originalText of currentOriginalTexts) {
+                    if (cacheData[originalText]) {
+                        delete cacheData[originalText];
+                        storageDeletedCount++;
+                    }
+                }
+                
+                await chrome.storage.local.set({ [CACHE_KEY]: cacheData });
+                console.log(`💾 영구 저장소에서 ${storageDeletedCount}개 삭제 완료`);
+            }
+        } catch (error) {
+            console.error('영구 저장소 업데이트 실패:', error);
+        }
+
+        // 현재 화면의 요소들을 원문으로 복원
         showTranslation = false;
-        toggleDisplayMode(); 
+        toggleDisplayMode();
         showTranslation = true;
 
-        await clearCache();
-        originalTextCache.clear();
-        processedNodes = new WeakSet();
-        failedTranslations.clear();
+        // 현재 화면의 요소들만 processedNodes에서 제거
+        const newProcessedNodes = new WeakSet();
+        for (const [element] of originalTextCache.entries()) {
+            if (!storyArea.contains(element)) {
+                newProcessedNodes.add(element);
+            }
+        }
+        processedNodes = newProcessedNodes;
+
+        // 현재 화면의 실패 기록 제거
+        const textsToRemoveFromFailed = new Set();
+        for (const [text, data] of failedTranslations.entries()) {
+            if (storyArea.contains(data.element)) {
+                textsToRemoveFromFailed.add(text);
+            }
+        }
+        for (const text of textsToRemoveFromFailed) {
+            failedTranslations.delete(text);
+        }
         
-        console.log('🔄 모든 캐시를 지우고 번역을 다시 시작합니다.');
+        console.log('🔄 현재 화면을 다시 번역합니다.');
         
+        // 재번역 실행
         await translateStoryArea();
-        startObserving();
     }
 
     // 메시지 수신
