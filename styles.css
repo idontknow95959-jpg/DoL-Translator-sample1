@@ -1,190 +1,825 @@
-/* DoL 번역기 팝업 스타일 */
-#popup-body {
-    width: 400px;
-    padding: 20px;
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    margin: 0;
-    box-sizing: border-box; /* 추가 */
+// iframe 내부에서만 실행되도록 체크
+if (window.self !== window.top) {
+    console.log('DoL 번역기: iframe 내부에서 실행 중');
+    
+    // 전역 변수
+    let translationEnabled = true;
+    let showTranslation = true;
+    let isTranslating = false;
+    let translationCache = new Map();
+    let originalTextCache = new WeakMap();
+    let failedTranslations = new Map();
+    let failedElements = new WeakMap();
+    let observer = null;
+    let processedNodes = new WeakSet();
+    let retryCount = 0;
+    let retryScheduled = false;
+    let retryTimer = null;
+    const MAX_RETRIES = 20;
+    const MAX_TRANSLATION_RETRIES = 3;
+    const MAX_BATCH_RETRIES = 3;
+    const CACHE_KEY = 'dol_translation_cache';
+    const MAX_CACHE_SIZE = 10000;
+
+// 🔹 로딩 스피너 표시
+function showLoadingSpinner() {
+    if (document.getElementById('dol-translation-spinner')) return;
+
+    const spinner = document.createElement('div');
+    spinner.id = 'dol-translation-spinner';
+    spinner.innerHTML = `
+        <div class="spinner-circle"></div>
+        <span class="spinner-text">번역 중...</span>
+    `;
+    document.body.appendChild(spinner);
 }
 
-#popup-body h2 {
-    margin-top: 0;
-    color: #333;
-    font-size: 18px;
+// 🔹 로딩 스피너 제거
+function hideLoadingSpinner() {
+    const spinner = document.getElementById('dol-translation-spinner');
+    if (spinner) spinner.remove();
 }
+    
+    // 버튼 텍스트에서 키 조합 파싱
+    function parseKeyFromText(text) {
+        if (!text) return null;
+        
+        // (1), (2), ..., (9), (0) 패턴
+        const numberMatch = text.match(/\((\d)\)/);
+        if (numberMatch) {
+            return { key: numberMatch[1], shiftKey: false };
+        }
+        
+        // (Shift+1), (Shift+2) 등 패턴 (대소문자 무시)
+        const shiftMatch = text.match(/\(Shift\s*\+\s*(\d)\)/i);
+        if (shiftMatch) {
+            return { key: shiftMatch[1], shiftKey: true };
+        }
+        
+        return null;
+    }
 
-#popup-body .section {
-    margin-bottom: 20px;
-}
+    // 키보드 이벤트 발생시키기
+    function triggerKeyEvent(key, shiftKey = false) {
+        const numKey = parseInt(key);
+        const keyCode = (numKey === 0) ? 48 : (48 + numKey);
+        
+        console.log(`🎮 키보드 이벤트 발생: ${shiftKey ? 'Shift+' : ''}${key} (keyCode: ${keyCode})`);
+        
+        const keydownEvent = new KeyboardEvent('keydown', {
+            key: key,
+            code: `Digit${key}`,
+            keyCode: keyCode,
+            which: keyCode,
+            shiftKey: shiftKey,
+            bubbles: true,
+            cancelable: true,
+            view: window
+        });
+        document.dispatchEvent(keydownEvent);
+        
+        const keypressEvent = new KeyboardEvent('keypress', {
+            key: key,
+            code: `Digit${key}`,
+            keyCode: keyCode,
+            which: keyCode,
+            shiftKey: shiftKey,
+            bubbles: true,
+            cancelable: true,
+            view: window
+        });
+        document.dispatchEvent(keypressEvent);
+        
+        setTimeout(() => {
+            const keyupEvent = new KeyboardEvent('keyup', {
+                key: key,
+                code: `Digit${key}`,
+                keyCode: keyCode,
+                which: keyCode,
+                shiftKey: shiftKey,
+                bubbles: true,
+                cancelable: true,
+                view: window
+            });
+            document.dispatchEvent(keyupEvent);
+        }, 50);
+    }
 
-#popup-body label {
-    display: block;
-    margin-bottom: 5px;
-    font-weight: bold;
-    color: #555;
-    font-size: 13px;
-}
+    // 번역 후 링크에 키보드 이벤트 리스너 추가
+    function attachKeyboardShortcuts(element) {
+        if (!element) return;
+        
+        const links = element.querySelectorAll('a.link-internal, a.macro-link, a[data-passage]');
+        let attachedCount = 0;
+        
+        links.forEach(link => {
+            const linkText = link.textContent || link.innerText || '';
+            const keyInfo = parseKeyFromText(linkText);
+            
+            if (keyInfo) {
+                link.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    console.log(`🖱️ 링크 클릭됨: "${linkText.substring(0, 30)}..." → 키 이벤트 발생`);
+                    triggerKeyEvent(keyInfo.key, keyInfo.shiftKey);
+                }, true);
+                
+                link.style.cursor = 'pointer';
+                attachedCount++;
+            }
+        });
+        
+        if (attachedCount > 0) {
+            console.log(`✅ ${attachedCount}개의 링크에 키보드 이벤트 연결됨`);
+        }
+    }
 
-#popup-body input[type="text"],
-#popup-body input[type="password"],
-#popup-body textarea {
-    width: 100%;
-    padding: 8px;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    box-sizing: border-box;
-    font-size: 13px;
-}
+    // 안전한 HTML 정리 함수
+    function sanitizeHTML(html) {
+        const wrapper = document.createElement('div');
+        wrapper.innerHTML = html;
 
-#popup-body textarea {
-    min-height: 100px;
-    resize: vertical;
-    font-family: 'Consolas', 'Courier New', monospace;
-}
+        wrapper.querySelectorAll('script, style').forEach(node => node.remove());
 
-#popup-body .toggle-container {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 10px;
-    background: #f5f5f5;
-    border-radius: 4px;
-}
+        wrapper.querySelectorAll('*').forEach(el => {
+            const attrs = Array.from(el.attributes);
+            attrs.forEach(attr => {
+                const name = attr.name.toLowerCase();
+                const value = attr.value || '';
 
-#popup-body .toggle-label {
-    font-weight: bold;
-    color: #333;
-}
+                if (name.startsWith('on')) {
+                    el.removeAttribute(attr.name);
+                    return;
+                }
 
-#popup-body .switch {
-    position: relative;
-    display: inline-block;
-    width: 50px;
-    height: 24px;
-}
+                if ((name === 'href' || name === 'src' || name.endsWith(':href')) && /^javascript:/i.test(value.trim())) {
+                    el.removeAttribute(attr.name);
+                    return;
+                }
+            });
+        });
 
-#popup-body .switch input {
-    opacity: 0;
-    width: 0;
-    height: 0;
-}
+        return wrapper.innerHTML;
+    }
 
-#popup-body .slider {
-    position: absolute;
-    cursor: pointer;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background-color: #ccc;
-    transition: .4s;
-    border-radius: 24px;
-}
+    // 캐시 로드 함수
+    async function loadCache() {
+        try {
+            const result = await chrome.storage.local.get(CACHE_KEY);
+            if (result[CACHE_KEY]) {
+                const cacheData = result[CACHE_KEY];
+                console.log(`📦 캐시 로드: ${Object.keys(cacheData).length}개 항목`);
+                for (const [key, value] of Object.entries(cacheData)) {
+                    translationCache.set(key, value);  // 👈 직접 저장
+                }
+            }
+        } catch (error) {
+            console.error('캐시 로드 실패:', error);
+        }
+    }
 
-#popup-body .slider:before {
-    position: absolute;
-    content: "";
-    height: 18px;
-    width: 18px;
-    left: 3px;
-    bottom: 3px;
-    background-color: white;
-    transition: .4s;
-    border-radius: 50%;
-}
+    // 캐시 저장 함수
+    let saveTimer = null;
+    async function saveCache() {
+        clearTimeout(saveTimer);
+        saveTimer = setTimeout(async () => {
+            try {
+                const cacheObject = {};
+                let count = 0;
+                
+                const entries = Array.from(translationCache.entries()).reverse();
 
-#popup-body input:checked + .slider {
-    background-color: #4CAF50;
-}
+                for (const [key, value] of entries) {
+                    if (count >= MAX_CACHE_SIZE) break;
 
-#popup-body input:checked + .slider:before {
-    transform: translateX(26px);
-}
+                        cacheObject[key] = value;
+                        count++;
+                    }
+                
+                if (count > 0) {
+                    await chrome.storage.local.set({ [CACHE_KEY]: cacheObject });
+                    console.log(`💾 캐시 저장: ${count}개 항목`);
+                }
 
-#popup-body #saveBtn {
-    width: 100%;
-    padding: 10px;
-    background: #4CAF50;
-    color: white;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 14px;
-    font-weight: bold;
-}
+            } catch (error) {
+                console.error('캐시 저장 실패:', error);
+            }
+        }, 2000);
+    }
 
-#popup-body #saveBtn:hover {
-    background: #45a049;
-}
+    // 번역 적용 헬퍼 함수
+    function applyTranslation(element, translation, originalHTML) {
+        if (!element || !document.contains(element)) return false;
+    
+        originalTextCache.set(element, originalHTML);
+        element.setAttribute('data-dol-translated', 'true');
+    
+        try {
+            element.innerHTML = sanitizeHTML(translation);
+            attachKeyboardShortcuts(element);
+            return true;
+        } catch (error) {
+            console.error('번역 적용 실패:', error);
+            return false;
+        }
+    }
 
+    // 캐시 통계
+    async function showCacheStats() {
+        const result = await chrome.storage.local.get(CACHE_KEY);
+        if (result[CACHE_KEY]) {
+            const size = JSON.stringify(result[CACHE_KEY]).length;
+            console.log(`📊 캐시 통계:
+- 항목 수: ${Object.keys(result[CACHE_KEY]).length}개
+- 데이터 크기: ${(size / 1024).toFixed(2)} KB`);
+        }
+    }
 
-#popup-body #refreshBtn {
-    width: 100%;
-    padding: 10px;
-    background: #2196F3; /* 파란색 계열 */
-    color: white;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 14px;
-    font-weight: bold;
-}
+    // 캐시 초기화
+    async function clearCache() {
+        await chrome.storage.local.remove(CACHE_KEY);
+        translationCache.clear();
+        console.log('🗑️ 캐시 초기화 완료');
+    }
 
-#popup-body #refreshBtn:hover {
-    background: #1e88e5;
-}
+    // 특정 캐시 항목 삭제
+    async function deleteCacheEntry(originalText) {
+        if (!originalText || typeof originalText !== 'string') {
+            console.error('❌ 삭제할 텍스트(원문)를 정확히 입력해주세요.');
+            return;
+        }
 
+        if (translationCache.has(originalText)) {
+            translationCache.delete(originalText);
+            console.log(`✅ 메모리 캐시에서 "${originalText}" 항목을 삭제했습니다.`);
+        }
 
-#popup-body .status {
-    margin-top: 10px;
-    padding: 10px;
-    border-radius: 4px;
-    text-align: center;
-    font-size: 13px;
-    display: none;
-}
+        try {
+            const result = await chrome.storage.local.get(CACHE_KEY);
+            if (result[CACHE_KEY] && result[CACHE_KEY][originalText]) {
+                delete result[CACHE_KEY][originalText];
+                await chrome.storage.local.set({ [CACHE_KEY]: result[CACHE_KEY] });
+                console.log(`💾 영구 캐시에서 "${originalText}" 항목을 삭제했습니다.`);
+            }
+        } catch (error) {
+            console.error('❌ 영구 캐시 삭제 중 오류 발생:', error);
+        }
+    }
 
-#popup-body .status.success {
-    background: #d4edda;
-    color: #155724;
-    display: block;
-}
+    // 토글 버튼 생성
+    function createToggleButton() {
+        const existingBtn = document.getElementById('dol-translation-toggle');
+        if (existingBtn) {
+            existingBtn.remove();
+        }
 
-#popup-body .status.error {
-    background: #f8d7da;
-    color: #721c24;
-    display: block;
-}
+        const button = document.createElement('button');
+        button.id = 'dol-translation-toggle';
+        button.textContent = 'Eng';
 
-#popup-body .hint {
-    font-size: 11px;
-    color: #888;
-    margin-top: 3px;
-}
+        button.addEventListener('click', () => {
+            showTranslation = !showTranslation;
+            button.textContent = showTranslation ? 'Eng' : 'Kor';
+            toggleDisplayMode();
+        });
 
-/* DoL 번역기 토글 버튼 스타일 (게임 내 버튼) */
-#dol-translation-toggle {
-    position: fixed !important;
-    bottom: 20px !important;
-    right: 20px !important;
-    z-index: 999999 !important;
-    padding: 10px 20px !important;
-    background: linear-gradient(45deg, rgba(138, 43, 226, 0.8), rgba(75, 0, 130, 0.8)) !important;
-    color: white !important;
-    border: 2px solid rgba(255, 255, 255, 0.7) !important;
-    border-radius: 50px !important;
-    cursor: pointer !important;
-    font-size: 16px !important;
-    font-weight: bold !important;
-    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4) !important;
-    transition: all 0.3s ease !important;
-    font-family: 'Arial Black', Gadget, sans-serif !important;
-    width: 80px;
-    text-align: center;
-}
+        if (document.body) {
+            document.body.appendChild(button);
+            console.log('✅ 토글 버튼 생성됨');
+        } else {
+            document.addEventListener('DOMContentLoaded', () => {
+                document.body.appendChild(button);
+                console.log('✅ 토글 버튼 생성됨 (DOMContentLoaded)');
+            });
+        }
+    }
 
-#dol-translation-toggle:hover {
-    transform: scale(1.1);
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5) !important;
-    background: linear-gradient(45deg, rgba(148, 53, 236, 0.9), rgba(85, 10, 140, 0.9)) !important;
+    // 원문/번역문 표시 전환
+    function toggleDisplayMode() {
+        const storyArea = document.querySelector('#story');
+        if (!storyArea) return;
+    
+        if (showTranslation) {
+            console.log('🔄 번역문으로 전환');
+            let restoredCount = 0;
+        
+            // 마커 속성으로 번역된 요소 찾기
+            const elements = storyArea.querySelectorAll('[data-dol-translated]');  // 👈 수정
+        
+            elements.forEach(element => {
+                const originalHTML = originalTextCache.get(element);
+                if (originalHTML) {
+                    const translation = translationCache.get(originalHTML);
+                    if (translation) {
+                        element.innerHTML = sanitizeHTML(translation);
+                        attachKeyboardShortcuts(element);
+                        restoredCount++;
+                    }
+                }
+            });
+        
+            console.log(`✅ ${restoredCount}개의 번역문을 복원했습니다.`);
+        } else {
+            console.log('🔄 원문으로 전환');
+            let restoredCount = 0;
+        
+            const elements = storyArea.querySelectorAll('[data-dol-translated]');  // 👈 수정
+        
+            elements.forEach(element => {
+                const originalHTML = originalTextCache.get(element);
+                if (originalHTML) {
+                    element.innerHTML = originalHTML;
+                    restoredCount++;
+                }
+            });
+        
+            console.log(`✅ ${restoredCount}개의 원문을 복원했습니다.`);
+        }
+    }
+
+    // 초기화
+    async function init() {
+        const settings = await chrome.storage.sync.get({
+            translationEnabled: true
+        });
+        translationEnabled = settings.translationEnabled;
+
+        if (translationEnabled) {
+            console.log('DoL 번역기 초기화 중...');
+            await loadCache();
+            setTimeout(() => {
+                createToggleButton();
+            }, 1000);
+            waitForStoryArea();
+        }
+    }
+
+    // 스토리 영역 대기
+    function waitForStoryArea() {
+        const storyArea = document.querySelector('#story');
+
+        if (storyArea) {
+            console.log('스토리 영역 발견: #story');
+            retryCount = 0;
+            startObserving();
+        } else {
+            retryCount++;
+            if (retryCount < MAX_RETRIES) {
+                console.log(`스토리 영역을 찾을 수 없습니다. 재시도 ${retryCount}/${MAX_RETRIES}...`);
+                setTimeout(waitForStoryArea, 1000);
+            } else {
+                console.error('스토리 영역을 찾지 못했습니다.');
+            }
+        }
+    }
+
+    // 스토리 영역 감시
+    function startObserving() {
+        if (observer) {
+            observer.disconnect();
+        }
+
+        const storyArea = document.querySelector('#story');
+
+        if (!storyArea) {
+            console.error('스토리 영역을 찾을 수 없습니다.');
+            return;
+        }
+
+        console.log('번역 감시 시작: #story');
+        translateStoryArea();
+
+        observer = new MutationObserver((mutations) => {
+            if (isTranslating) return;
+            
+            let hasStoryChange = false;
+            for (const mutation of mutations) {
+                if (mutation.target === storyArea || storyArea.contains(mutation.target)) {
+                    hasStoryChange = true;
+                    break;
+                }
+            }
+            
+            if (hasStoryChange) {
+                debounceTranslate();
+            }
+        });
+
+        observer.observe(storyArea, {
+            childList: true,
+            subtree: true,
+            characterData: true
+        });
+    }
+
+    // 디바운스
+    let debounceTimer;
+    function debounceTranslate() {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+            translateStoryArea();
+        }, 500);
+    }
+
+    // 번역문 찾기
+    function findTranslation(text) {
+        if (translationCache.has(text)) {
+            return translationCache.get(text);  // 👈 직접 반환
+        }      
+        return null;
+    }
+
+    // 스토리 영역 번역
+    async function translateStoryArea() {
+        if (!translationEnabled || isTranslating) return;
+
+        const storyArea = document.querySelector('#story');
+        if (!storyArea) {
+            console.error('스토리 영역을 찾을 수 없습니다.');
+            return;
+        }
+
+        isTranslating = true;
+        showLoadingSpinner();
+
+        try {
+            const textNodesToProcess = getTextNodes(storyArea)
+                .filter(node => !processedNodes.has(node) && shouldTranslate(node.textContent));
+
+            if (textNodesToProcess.length === 0) {
+                isTranslating = false;
+                return;
+            }
+
+            const parents = [...new Set(textNodesToProcess.map(n => n.parentElement).filter(p => p))];
+            const batches = [];
+
+            for (const parent of parents) {
+                let blockAncestor = parent.closest('p, div, section, article, li, blockquote');
+                if (!blockAncestor || !storyArea.contains(blockAncestor)) {
+                    blockAncestor = parent;
+                }
+
+                if (batches.some(b => b.element === blockAncestor)) continue;
+
+                let html = '';
+                try {
+                    if (blockAncestor.ownerDocument === document) {
+                        html = blockAncestor.innerHTML.trim();
+                    }
+                } catch (e) {
+                    console.warn('cross-origin block 무시됨:', e.message);
+                    continue;
+                }
+
+                if (/[A-Za-z]/.test(html)) {
+                    batches.push({ element: blockAncestor, html });
+                }
+            }
+
+            console.log(`${batches.length}개의 번역 단위(배치) 발견`);
+
+            let translatedCount = 0;
+            let failedCount = 0;
+
+            for (const batch of batches) {
+                const { element, html } = batch;
+                const originalHTML = html;
+
+                const foundTranslation = findTranslation(originalHTML);
+                if (foundTranslation) {
+                    if (showTranslation) {
+                        applyTranslation(element, foundTranslation, originalHTML);  // 👈 수정
+                    } else {
+                        originalTextCache.set(element, originalHTML);
+                        element.setAttribute('data-dol-translated', 'true');
+                    }
+                    translatedCount++;
+                    continue;
+                }
+
+                const result = await translateWithRetry(originalHTML, element);
+                if (result.success) translatedCount++;
+                else failedCount++;
+
+                await sleep(400);
+            }
+
+            console.log(`✅ 번역 완료: ${translatedCount}개 배치 성공, ${failedCount}개 배치 실패`);
+            
+            if (translatedCount > 0) {
+                saveCache();
+            }
+            
+            if (failedCount > 0 && !retryScheduled) {
+                scheduleRetry();
+            }
+
+        } finally {
+            isTranslating = false;
+            hideLoadingSpinner();
+        }
+    }
+
+    // 재시도 스케줄링
+    function scheduleRetry() {
+        if (retryScheduled || failedTranslations.size === 0) return;
+        retryScheduled = true;
+        console.log(`⏳ 5초 후 실패한 번역 ${failedTranslations.size}개를 재시도합니다...`);
+        retryTimer = setTimeout(() => {
+            retryScheduled = false;
+            retryFailedTranslations();
+        }, 5000);
+    }
+
+    // 번역 함수
+    async function translateWithRetry(text, element, currentRetry = 0) {
+        try {
+            console.log(`번역 요청 (시도 ${currentRetry + 1}/${MAX_TRANSLATION_RETRIES}):`, text.substring(0, 50) + '...');
+            const translation = await requestTranslation(text);
+
+            if (translation) {
+                // elements 배열 제거
+                translationCache.set(text, translation);  // 👈 수정
+
+                if (showTranslation && element && document.contains(element)) {
+                    applyTranslation(element, translation, text);  // 👈 수정
+                } else {
+                    originalTextCache.set(element, text);
+                    element.setAttribute('data-dol-translated', 'true');
+                }
+
+                processedNodes.add(element);
+                failedTranslations.delete(text);
+            
+                console.log('✓ 번역 성공:', translation.substring(0, 50) + '...');
+                return { success: true };
+            }
+
+            throw new Error('번역 결과가 비어있습니다.');
+        } catch (error) {
+            console.error(`❌ 번역 실패 (${currentRetry + 1}/${MAX_TRANSLATION_RETRIES}):`, error.message);
+
+            if (currentRetry < MAX_TRANSLATION_RETRIES - 1) {
+                await sleep(1000);
+                return await translateWithRetry(text, element, currentRetry + 1);
+            } else {
+                failedTranslations.set(text, { retryCount: 0 });
+                failedElements.set(element, text);
+                console.error('❌ 최대 재시도 횟수 초과:', text.substring(0, 50) + '...');
+                return { success: false };
+            }
+        }
+    }
+
+    // 실패한 번역 재시도
+    async function retryFailedTranslations() {
+        if (failedTranslations.size === 0) return;
+        
+        console.log(`🔄 실패한 번역 ${failedTranslations.size}개 재시도 중...`);
+        const failedEntries = Array.from(failedTranslations.entries());
+        let successCount = 0;
+        let stillFailedCount = 0;
+        
+        for (const [text, data] of failedEntries) {
+            const { element, retryCount } = data;
+            
+            if (!document.contains(element)) {
+                failedTranslations.delete(text);
+                continue;
+            }
+            if (translationCache.has(text) || retryCount >= MAX_BATCH_RETRIES) {
+                failedTranslations.delete(text);
+                continue;
+            }
+            
+            const result = await translateWithRetry(text, element);
+            if (result.success) {
+                successCount++;
+                failedTranslations.delete(text);
+            } else {
+                failedTranslations.set(text, { element, retryCount: retryCount + 1 });
+                stillFailedCount++;
+            }
+            await sleep(400);
+        }
+        
+        console.log(`🔄 재시도 완료: ${successCount}개 성공, ${stillFailedCount}개 여전히 실패`);
+        
+        if (successCount > 0) {
+            saveCache();
+        }
+        
+        if (failedTranslations.size > 0) {
+            scheduleRetry();
+        } else {
+            console.log('✅ 모든 번역 작업 완료!');
+        }
+    }
+
+    // 텍스트 노드 추출
+    function getTextNodes(element) {
+        const textNodes = [];
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, {
+            acceptNode: function(node) {
+                const parent = node.parentElement;
+                if (!parent || ['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEXTAREA', 'INPUT', 'BUTTON'].includes(parent.tagName)) {
+                    return NodeFilter.FILTER_REJECT;
+                }
+
+                if (parent.closest('#customOverlay[data-overlay="saves"]')) {
+                return NodeFilter.FILTER_REJECT;
+                }
+
+                if (!node.textContent.trim()) {
+                    return NodeFilter.FILTER_REJECT;
+                }
+                if (parent.offsetParent === null && parent.style.display !== 'contents') {
+                    return NodeFilter.FILTER_REJECT;
+                }
+                return NodeFilter.FILTER_ACCEPT;
+            }
+        });
+        let node;
+        while (node = walker.nextNode()) {
+            textNodes.push(node);
+        }
+        return textNodes;
+    }
+
+    // 번역 대상 확인
+    function shouldTranslate(text) {
+        const trimmed = text.trim().toLowerCase();
+        if (trimmed.length < 2 && !['a', 'i'].includes(trimmed)) return false;
+
+        const patterns = [
+            /^\d+$/,
+            /^[^\w\s]+$/,
+            /[ㄱ-ㅎ|ㅏ-ㅣ|가-힣]/,
+            /^\d+°c$/,
+            /^[a-df][+\-]?$/,
+            /^[a-z]\*$/
+        ];
+
+        if (patterns.some((re) => re.test(trimmed))) return false;
+        if (!/[a-z]/.test(trimmed)) return false;
+
+        return true;
+    }
+
+    // 번역 요청 - dictionary를 그대로 전달
+    function requestTranslation(text) {
+        return new Promise((resolve, reject) => {
+            chrome.runtime.sendMessage({ 
+                action: 'translate', 
+                text: text,
+                dictionary: typeof localDictionary !== 'undefined' ? localDictionary : {}
+            }, (response) => {
+                if (chrome.runtime.lastError) {
+                    reject(new Error(chrome.runtime.lastError.message));
+                } else if (response && response.success) {
+                    resolve(response.translation);
+                } else {
+                    reject(new Error(response?.error || '번역 실패'));
+                }
+            });
+        });
+    }
+
+    // 대기 함수
+    function sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+    
+// 강제 새로고침 - 현재 화면만
+    async function forceRefresh() {
+        console.log('🔄 수동 새로고침 요청 수신됨. 현재 화면의 캐시를 지우고 새로 번역합니다.');
+        
+        if (isTranslating) {
+            console.log('번역이 진행 중이므로 새로고침을 중단합니다.');
+            return;
+        }
+
+        const storyArea = document.querySelector('#story');
+        if (!storyArea) {
+            console.error('스토리 영역을 찾을 수 없습니다.');
+            return;
+        }
+
+        // 현재 화면에 표시된 원문 수집
+        const currentOriginalTexts = new Set();
+        for (const [element, originalHTML] of originalTextCache.entries()) {
+            if (document.contains(element) && storyArea.contains(element)) {
+                currentOriginalTexts.add(originalHTML);
+            }
+        }
+
+        console.log(`📝 현재 화면의 ${currentOriginalTexts.size}개 원문 캐시를 삭제합니다.`);
+
+        // 현재 화면의 원문만 캐시에서 삭제
+        let deletedCount = 0;
+        for (const originalText of currentOriginalTexts) {
+            if (translationCache.has(originalText)) {
+                translationCache.delete(originalText);
+                deletedCount++;
+            }
+        }
+
+        console.log(`🗑️ ${deletedCount}개의 번역 캐시가 삭제되었습니다.`);
+
+        // 영구 저장소에서도 삭제
+        try {
+            const result = await chrome.storage.local.get(CACHE_KEY);
+            if (result[CACHE_KEY]) {
+                const cacheData = result[CACHE_KEY];
+                let storageDeletedCount = 0;
+                
+                for (const originalText of currentOriginalTexts) {
+                    if (cacheData[originalText]) {
+                        delete cacheData[originalText];
+                        storageDeletedCount++;
+                    }
+                }
+                
+                await chrome.storage.local.set({ [CACHE_KEY]: cacheData });
+                console.log(`💾 영구 저장소에서 ${storageDeletedCount}개 삭제 완료`);
+            }
+        } catch (error) {
+            console.error('영구 저장소 업데이트 실패:', error);
+        }
+
+        // 현재 화면의 요소들을 원문으로 복원
+        showTranslation = false;
+        toggleDisplayMode();
+        showTranslation = true;
+
+        // 현재 화면의 요소들만 processedNodes에서 제거
+        const newProcessedNodes = new WeakSet();
+        for (const [element] of originalTextCache.entries()) {
+            if (!storyArea.contains(element)) {
+                newProcessedNodes.add(element);
+            }
+        }
+        processedNodes = newProcessedNodes;
+
+        // 현재 화면의 실패 기록 제거
+        const textsToRemoveFromFailed = new Set();
+        for (const [text, data] of failedTranslations.entries()) {
+            if (storyArea.contains(data.element)) {
+                textsToRemoveFromFailed.add(text);
+            }
+        }
+        for (const text of textsToRemoveFromFailed) {
+            failedTranslations.delete(text);
+        }
+        
+        console.log('🔄 현재 화면을 다시 번역합니다.');
+        
+        // 재번역 실행
+        await translateStoryArea();
+    }
+
+    // 메시지 수신
+    chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+        if (request.action === 'updateSettings') {
+            translationEnabled = request.enabled;
+            if (retryTimer) clearTimeout(retryTimer);
+            retryScheduled = false;
+
+            if (translationEnabled) {
+                processedNodes = new WeakSet();
+                retryCount = 0;
+                if (!document.getElementById('dol-translation-toggle')) {
+                    createToggleButton();
+                }
+                waitForStoryArea();
+            } else {
+                if (observer) observer.disconnect();
+                const btn = document.getElementById('dol-translation-toggle');
+                if (btn) btn.remove();
+            }
+            sendResponse({ success: true });
+        } else if (request.action === 'showCacheStats') {
+            showCacheStats();
+            sendResponse({ success: true });
+        } else if (request.action === 'clearCache') {
+            clearCache();
+            sendResponse({ success: true });
+        } else if (request.action === 'forceRefresh') {
+            forceRefresh();
+            sendResponse({ success: true });
+        }
+    });
+
+    // 콘솔 유틸리티
+    window.dolTranslator = {
+        showStats: showCacheStats,
+        clearCache: clearCache,
+        delete: deleteCacheEntry,
+        getCacheSize: () => translationCache.size
+    };
+
+    init();
+} else {
+    console.log('DoL 번역기: 메인 페이지 (iframe 외부) - 실행하지 않음');
 }
