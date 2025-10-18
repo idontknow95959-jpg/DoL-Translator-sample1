@@ -20,6 +20,25 @@ if (window.self !== window.top) {
     const MAX_BATCH_RETRIES = 3;
     const CACHE_KEY = 'dol_translation_cache';
     const MAX_CACHE_SIZE = 10000;
+
+// 🔹 로딩 스피너 표시
+function showLoadingSpinner() {
+    if (document.getElementById('dol-translation-spinner')) return;
+
+    const spinner = document.createElement('div');
+    spinner.id = 'dol-translation-spinner';
+    spinner.innerHTML = `
+        <div class="spinner-circle"></div>
+        <span class="spinner-text">번역 중...</span>
+    `;
+    document.body.appendChild(spinner);
+}
+
+// 🔹 로딩 스피너 제거
+function hideLoadingSpinner() {
+    const spinner = document.getElementById('dol-translation-spinner');
+    if (spinner) spinner.remove();
+}
     
     // 버튼 텍스트에서 키 조합 파싱
     function parseKeyFromText(text) {
@@ -421,6 +440,7 @@ if (window.self !== window.top) {
         }
 
         isTranslating = true;
+        showLoadingSpinner();
 
         try {
             const textNodesToProcess = getTextNodes(storyArea)
@@ -497,6 +517,7 @@ if (window.self !== window.top) {
 
         } finally {
             isTranslating = false;
+            hideLoadingSpinner();
         }
     }
 
